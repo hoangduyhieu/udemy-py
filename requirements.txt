@@ -1,0 +1,16 @@
+certifi
+charset-normalizer
+colorama
+idna
+iso8601
+m3u8
+markdown-it-py
+mdurl
+pathvalidate
+pycryptodome
+Pygments
+requests
+rich
+tqdm
+urllib3
+webvtt-py
