@@ -3,23 +3,24 @@ import re
 import time
 import logging
 import argparse
+import shutil
+import sys
+import unicodedata
 from itertools import cycle
 from shutil import get_terminal_size
 from threading import Thread
 from rich.progress import TextColumn
 
-import sys
 sys.stdout.reconfigure(encoding='utf-8')
 
-COURSE_URL = "https://udemy.com/api-2.0/courses/{course_id}/"
-CURRICULUM_URL = "https://udemy.com/api-2.0/courses/{course_id}/subscriber-curriculum-items/?page_size=200&fields[lecture]=title,object_index,is_published,sort_order,created,asset,supplementary_assets,is_free&fields[quiz]=title,object_index,is_published,sort_order,type&fields[practice]=title,object_index,is_published,sort_order&fields[chapter]=title,object_index,is_published,sort_order&fields[asset]=title,filename,asset_type,status,time_estimation,is_external&caching_intent=True"
-LECTURE_URL = "https://www.udemy.com/api-2.0/users/me/subscribed-courses/{course_id}/lectures/{lecture_id}?fields[lecture]=asset,description,download_url,is_free,last_watched_second&fields[asset]=asset_type,media_sources,captions"
-QUIZ_URL = "https://udemy.com/api-2.0/quizzes/{quiz_id}/assessments/?version=1&page_size=200&fields[assessment]=id,assessment_type,prompt,correct_response,section,question_plain,related_lectures"
-LINK_ASSET_URL = "https://www.udemy.com/api-2.0/users/me/subscribed-courses/{course_id}/lectures/{lecture_id}/supplementary-assets/{asset_id}/?fields[asset]=external_url"
-FILE_ASSET_URL = "https://www.udemy.com/api-2.0/users/me/subscribed-courses/{course_id}/lectures/{lecture_id}/supplementary-assets/{asset_id}/?fields[asset]=download_urls"
-ARTICLE_URL = "https://www.udemy.com/api-2.0/assets/{article_id}/?fields[asset]=@min,status,delayed_asset_message,processing_errors,body"
-
-HOME_DIR = os.getcwd()
+# Update URLs to be dynamic based on the subdomain
+COURSE_URL = "https://{portal_name}.udemy.com/api-2.0/courses/{course_id}/"
+CURRICULUM_URL = "https://{portal_name}.udemy.com/api-2.0/courses/{course_id}/subscriber-curriculum-items/?page_size=200&fields[lecture]=title,object_index,is_published,sort_order,created,asset,supplementary_assets,is_free&fields[quiz]=title,object_index,is_published,sort_order,type&fields[practice]=title,object_index,is_published,sort_order&fields[chapter]=title,object_index,is_published,sort_order&fields[asset]=title,filename,asset_type,status,time_estimation,is_external&caching_intent=True"
+LECTURE_URL = "https://{portal_name}.udemy.com/api-2.0/users/me/subscribed-courses/{course_id}/lectures/{lecture_id}?fields[lecture]=asset,description,download_url,is_free,last_watched_second&fields[asset]=asset_type,media_sources,captions,download_urls,slide_urls,external_url"
+QUIZ_URL = "https://{portal_name}.udemy.com/api-2.0/quizzes/{quiz_id}/assessments/?version=1&page_size=200&fields[assessment]=id,assessment_type,prompt,correct_response,section,question_plain,related_lectures"
+LINK_ASSET_URL = "https://{portal_name}.udemy.com/api-2.0/users/me/subscribed-courses/{course_id}/lectures/{lecture_id}/supplementary-assets/{asset_id}/?fields[asset]=external_url"
+FILE_ASSET_URL = "https://{portal_name}.udemy.com/api-2.0/users/me/subscribed-courses/{course_id}/lectures/{lecture_id}/supplementary-assets/{asset_id}/?fields[asset]=download_urls"
+ARTICLE_URL = "https://{portal_name}.udemy.com/api-2.0/assets/{article_id}/?fields[asset]=@min,status,delayed_asset_message,processing_errors,body"
 
 HOME_DIR = os.getcwd()
 DOWNLOAD_DIR = os.path.join(HOME_DIR, "courses")
@@ -92,7 +93,6 @@ class Loader:
     def stop(self):
         self.done = True
         # Clear the spinner line
-        import shutil
         cols = shutil.get_terminal_size(fallback=(80, 20)).columns
         print("\r" + " " * cols, end="", flush=True)
         print("\r", end="", flush=True)
@@ -133,7 +133,8 @@ def remove_emojis_and_binary(text):
 
     text = emoji_pattern.sub(r'', text)
 
-    text = ''.join(c for c in text if 32 <= ord(c) <= 126)
+    # Remove only control characters while keeping all valid Unicode characters
+    text = ''.join(c for c in text if not unicodedata.category(c).startswith('C'))
 
     return text
 

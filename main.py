@@ -15,6 +15,7 @@ from rich import print as rprint
 import re
 import http.cookiejar as cookielib
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import shutil
 
 from constants import *
 from utils.process_m3u8 import download_and_merge_m3u8
@@ -30,20 +31,40 @@ class Udemy:
     def __init__(self):
         global cookie_jar
         try:
-            cookie_jar = cookielib.MozillaCookieJar(cookie_path)
-            cookie_jar.load()
+            if bearer_token:
+                logger.info(f"Using provided bearer token for authentication")
+            else:
+                cookie_jar = cookielib.MozillaCookieJar(cookie_path)
+                cookie_jar.load()
         except Exception as e:
             logger.critical(f"The provided cookie file could not be read or is incorrectly formatted. Please ensure the file is in the correct format and contains valid authentication cookies.")
             sys.exit(1)
     
     def request(self, url):
         try:
-            response = requests.get(url, cookies=cookie_jar, stream=True)
+            if bearer_token:
+                headers = {
+                    'Authorization': f'Bearer {bearer_token}',
+                    'X-Udemy-Authorization': f'Bearer {bearer_token}'
+                }
+                response = requests.get(url, headers=headers, stream=True)
+            else:
+                response = requests.get(url, cookies=cookie_jar, stream=True)
             return response
         except Exception as e:
             logger.critical(f"There was a problem reaching the Udemy server. This could be due to network issues, an invalid URL, or Udemy being temporarily unavailable.")
 
+    def extract_portal_name(self, url):
+        """Extract the portal name from a Udemy URL."""
+        obj = re.search(r"(?i)(?://(?P<portal_name>.+?).udemy.com)", url)
+        if obj:
+            return obj.group("portal_name")
+        return "www"  # Default to www if not found
+
     def extract_course_id(self, course_url):
+        global portal_name
+        portal_name = self.extract_portal_name(course_url)
+        logger.info(f"Portal name detected: {portal_name}")
 
         with Loader(f"Fetching course ID"):            
             response = self.request(course_url)
@@ -67,7 +88,7 @@ class Udemy:
         
     def fetch_course(self, course_id):
         try:
-            response = self.request(COURSE_URL.format(course_id=course_id)).json()
+            response = self.request(COURSE_URL.format(portal_name=portal_name, course_id=course_id)).json()
     
             if response.get('detail') == 'Not found.':
                 logger.critical("The course could not be found with the provided ID or URL. Please verify the course ID/URL and ensure that it is publicly accessible or you have the necessary permissions.")
@@ -80,7 +101,7 @@ class Udemy:
     
     def fetch_course_curriculum(self, course_id):
         all_results = []
-        url = CURRICULUM_URL.format(course_id=course_id)
+        url = CURRICULUM_URL.format(portal_name=portal_name, course_id=course_id)
         total_count = 0
 
         logger.info("Fetching course curriculum. This may take a while")
@@ -168,7 +189,7 @@ class Udemy:
 
     def fetch_lecture_info(self, course_id, lecture_id):
         try:
-            return self.request(LECTURE_URL.format(course_id=course_id, lecture_id=lecture_id)).json()
+            return self.request(LECTURE_URL.format(portal_name=portal_name, course_id=course_id, lecture_id=lecture_id)).json()
         except Exception as e:
             logger.critical(f"Failed to fetch lecture info: {e}")
             sys.exit(1)
@@ -184,30 +205,90 @@ class Udemy:
 
     def download_lecture(self, course_id, lecture, lect_info, temp_folder_path, lindex, folder_path, task_id, progress):
         if not skip_captions and len(lect_info["asset"]["captions"]) > 0:
-            download_captions(lect_info["asset"]["captions"], folder_path, f"{lindex}. {sanitize_filename(lecture['title'])}", captions, convert_to_srt)
+            download_captions(lect_info["asset"]["captions"], folder_path, f"{lindex}. {sanitize_filename(lecture['title'])}", captions, convert_to_srt, portal_name)
 
         if not skip_assets and len(lecture["supplementary_assets"]) > 0:
-            download_supplementary_assets(self, lecture["supplementary_assets"], folder_path, course_id, lect_info["id"])
+            download_supplementary_assets(self, lecture["supplementary_assets"], folder_path, course_id, lect_info["id"], portal_name)
 
-        if not skip_lectures and lect_info['asset']['asset_type'] == "Video":
-            mpd_url = next((item['src'] for item in lect_info['asset']['media_sources'] if item['type'] == "application/dash+xml"), None)
-            mp4_url = next((item['src'] for item in lect_info['asset']['media_sources'] if item['type'] == "video/mp4"), None)
-            m3u8_url = next((item['src'] for item in lect_info['asset']['media_sources'] if item['type'] == "application/x-mpegURL"), None)
-            
-            if mpd_url is None:
-                if m3u8_url is None:
-                    if mp4_url is None:
-                        logger.error(f"This lecture appears to be served in different format. We currently do not support downloading this format. Please create an issue on GitHub if you need this feature.")
+        asset_type = lect_info['asset']['asset_type']
+        
+        if not skip_lectures:
+            if asset_type == "Video":
+                mpd_url = next((item['src'] for item in lect_info['asset']['media_sources'] if item['type'] == "application/dash+xml"), None)
+                mp4_url = next((item['src'] for item in lect_info['asset']['media_sources'] if item['type'] == "video/mp4"), None)
+                m3u8_url = next((item['src'] for item in lect_info['asset']['media_sources'] if item['type'] == "application/x-mpegURL"), None)
+                
+                if mpd_url is None:
+                    if m3u8_url is None:
+                        if mp4_url is None:
+                            logger.error(f"This lecture appears to be served in different format. We currently do not support downloading this format. Please create an issue on GitHub if you need this feature.")
+                        else:
+                            download_mp4(mp4_url, temp_folder_path, f"{lindex}. {sanitize_filename(lecture['title'])}", task_id, progress)
                     else:
-                        download_mp4(mp4_url, temp_folder_path, f"{lindex}. {sanitize_filename(lecture['title'])}", task_id, progress)
+                        download_and_merge_m3u8(m3u8_url, temp_folder_path, f"{lindex}. {sanitize_filename(lecture['title'])}", task_id, progress, portal_name)
                 else:
-                    download_and_merge_m3u8(m3u8_url, temp_folder_path, f"{lindex}. {sanitize_filename(lecture['title'])}", task_id, progress)
+                    if key is None:
+                        logger.warning("The video appears to be DRM-protected, and it may not play without a valid Widevine decryption key.")
+                    download_and_merge_mpd(mpd_url, temp_folder_path, f"{lindex}. {sanitize_filename(lecture['title'])}", lecture['asset']['time_estimation'], key, task_id, progress, portal_name)
+            elif asset_type == "Article":
+                if not skip_articles:
+                    download_article(self, lect_info['asset'], temp_folder_path, f"{lindex}. {sanitize_filename(lecture['title'])}", task_id, progress, portal_name)
+            elif asset_type == "File" or "download_urls" in lect_info['asset']:
+                # Handle PDF and other direct file downloads
+                progress.update(task_id, description=f"Downloading File {lindex}. {sanitize_filename(lecture['title'])}", completed=0)
+                
+                try:
+                    if "download_urls" in lect_info['asset'] and lect_info['asset']['download_urls']:
+                        # Get the first available download URL
+                        for file_type, downloads in lect_info['asset']['download_urls'].items():
+                            if downloads and len(downloads) > 0:
+                                file_url = downloads[0]['file']
+                                file_ext = os.path.splitext(downloads[0]['file_name'])[1] if 'file_name' in downloads[0] else '.pdf'
+                                
+                                # Create the output file path
+                                output_file = os.path.join(folder_path, f"{lindex}. {sanitize_filename(lecture['title'])}{file_ext}")
+                                
+                                # Download the file
+                                file_response = self.request(file_url)
+                                file_response.raise_for_status()
+                                
+                                with open(output_file, 'wb') as f:
+                                    for chunk in file_response.iter_content(chunk_size=8192):
+                                        if chunk:
+                                            f.write(chunk)
+                                
+                                progress.console.log(f"[green]Downloaded {lindex}. {sanitize_filename(lecture['title'])}{file_ext}[/green] ✓")
+                                break  # Only download the first available file
+                        else:
+                            # If no download URL was found in the loop
+                            progress.console.log(f"[yellow]No download URL found for {lindex}. {sanitize_filename(lecture['title'])}[/yellow]")
+                    else:
+                        progress.console.log(f"[yellow]No download URLs available for {lindex}. {sanitize_filename(lecture['title'])}[/yellow]")
+                        
+                    # Debug output to help understand the structure
+                    logger.debug(f"Asset info for lecture without download_urls: {json.dumps(lect_info['asset'], indent=2)}")
+                except Exception as e:
+                    progress.console.log(f"[red]Error downloading file {lindex}. {sanitize_filename(lecture['title'])}: {str(e)}[/red]")
+                    logger.error(f"Error downloading file: {str(e)}")
+                
+                # Always clean up the temporary folder after downloading files
+                try:
+                    if os.path.exists(temp_folder_path) and os.path.isdir(temp_folder_path):
+                        shutil.rmtree(temp_folder_path)
+                        logger.debug(f"Removed temporary folder: {temp_folder_path}")
+                except Exception as e:
+                    logger.warning(f"Could not remove temporary folder {temp_folder_path}: {str(e)}")
             else:
-                if key is None:
-                    logger.warning("The video appears to be DRM-protected, and it may not play without a valid Widevine decryption key.")
-                download_and_merge_mpd(mpd_url, temp_folder_path, f"{lindex}. {sanitize_filename(lecture['title'])}", lecture['asset']['time_estimation'], key, task_id, progress)
-        elif not skip_articles and lect_info['asset']['asset_type'] == "Article":
-            download_article(self, lect_info['asset'], temp_folder_path, f"{lindex}. {sanitize_filename(lecture['title'])}", task_id, progress)
+                logger.warning(f"Unsupported asset type: {asset_type} for lecture: {lecture['title']}")
+                progress.console.log(f"[yellow]Skipping unsupported asset type: {asset_type} for {lindex}. {sanitize_filename(lecture['title'])}[/yellow]")
+                
+                # Clean up the temporary folder for skipped lectures too
+                try:
+                    if os.path.exists(temp_folder_path) and os.path.isdir(temp_folder_path):
+                        shutil.rmtree(temp_folder_path)
+                        logger.debug(f"Removed temporary folder: {temp_folder_path}")
+                except Exception as e:
+                    logger.warning(f"Could not remove temporary folder {temp_folder_path}: {str(e)}")
 
         try:
             progress.remove_task(task_id)
@@ -294,14 +375,15 @@ class Udemy:
                         break
 
 def check_prerequisites():
-    if not cookie_path:
-        if not os.path.isfile(os.path.join(HOME_DIR, "cookies.txt")):
-            logger.error(f"Please provide a valid cookie file using the '--cookie' option.")
-            return False
-    else:
-        if not os.path.isfile(cookie_path):
-            logger.error(f"The provided cookie file path does not exist.")
-            return False
+    if not bearer_token:
+        if not cookie_path:
+            if not os.path.isfile(os.path.join(HOME_DIR, "cookies.txt")):
+                logger.error(f"Please provide a valid cookie file using the '--cookie' option or a bearer token using the '--bearer' option.")
+                return False
+        else:
+            if not os.path.isfile(cookie_path):
+                logger.error(f"The provided cookie file path does not exist.")
+                return False
 
     try:
         subprocess.run(["ffmpeg", "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
@@ -327,16 +409,20 @@ def parse_chapter_filter(chapter_filter_str):
             chapter_filter.add(int(part))
     return chapter_filter
 
+# Thêm biến toàn cục
+bearer_token = None
+
 def main():
 
     try:
-        global course_url, key, cookie_path, COURSE_DIR, captions, max_concurrent_lectures, skip_captions, skip_assets, skip_lectures, skip_articles, skip_assignments, convert_to_srt, chapter_filter
+        global course_url, key, cookie_path, COURSE_DIR, captions, max_concurrent_lectures, skip_captions, skip_assets, skip_lectures, skip_articles, skip_assignments, convert_to_srt, chapter_filter, portal_name, bearer_token
 
         parser = argparse.ArgumentParser(description="Udemy Course Downloader")
         parser.add_argument("--id", "-i", type=int, required=False, help="The ID of the Udemy course to download")
         parser.add_argument("--url", "-u", type=str, required=False, help="The URL of the Udemy course to download")
         parser.add_argument("--key", "-k", type=str, help="Key to decrypt the DRM-protected videos")
         parser.add_argument("--cookies", "-c", type=str, default="cookies.txt", help="Path to cookies.txt file")
+        parser.add_argument("--bearer", "-b", type=str, help="Bearer token for authentication (for Udemy Business)")
         parser.add_argument("--load", "-l", help="Load course curriculum from file", action=LoadAction, const=True, nargs='?')
         parser.add_argument("--save", "-s", help="Save course curriculum to a file", action=LoadAction, const=True, nargs='?')
         parser.add_argument("--concurrent", "-cn", type=int, default=4, help="Maximum number of concurrent downloads")
@@ -385,6 +471,11 @@ def main():
         if args.cookies:
             cookie_path = args.cookies
 
+        if args.bearer:
+            bearer_token = args.bearer
+        else:
+            bearer_token = None
+
         if not check_prerequisites():
             return
         
@@ -392,8 +483,11 @@ def main():
 
         if args.id:
             course_id = args.id
+            # If we have a course ID but no URL, we need to set a default portal_name
+            portal_name = "www"
         else:
             course_id = udemy.extract_course_id(course_url)
+            # portal_name should be set by extract_course_id
 
         if args.captions:
             try:

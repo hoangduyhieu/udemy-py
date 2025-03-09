@@ -6,7 +6,7 @@ import requests
 import subprocess
 from constants import remove_emojis_and_binary
 
-def download_and_merge_m3u8(m3u8_file_url, download_folder_path, title_of_output_mp4, task_id, progress):
+def download_and_merge_m3u8(m3u8_file_url, download_folder_path, title_of_output_mp4, task_id, progress, portal_name="www"):
     progress.update(task_id,  description=f"Downloading Stream {remove_emojis_and_binary(title_of_output_mp4)}", completed=0)
     
     response = requests.get(m3u8_file_url)
@@ -41,9 +41,9 @@ def download_and_merge_m3u8(m3u8_file_url, download_folder_path, title_of_output
     with open(m3u8_file_path, 'wb') as file:
         file.write(highest_quality_response.content) 
 
-    merge_segments_into_mp4(m3u8_file_path, download_folder_path, title_of_output_mp4, task_id, progress)
+    merge_segments_into_mp4(m3u8_file_path, download_folder_path, title_of_output_mp4, task_id, progress, portal_name)
 
-def merge_segments_into_mp4(m3u8_file_path, download_folder_path, output_file_name, task_id, progress):
+def merge_segments_into_mp4(m3u8_file_path, download_folder_path, output_file_name, task_id, progress, portal_name="www"):
     output_path = os.path.dirname(download_folder_path)
 
     progress.update(task_id,  description=f"Merging segments {remove_emojis_and_binary(output_file_name)}", completed=0)

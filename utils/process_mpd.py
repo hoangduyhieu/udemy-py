@@ -6,7 +6,7 @@ import requests
 from urllib.parse import urlparse
 from constants import remove_emojis_and_binary, timestamp_to_seconds
 
-def download_and_merge_mpd(mpd_file_url, download_folder_path, title_of_output_mp4, length, key, task_id, progress):
+def download_and_merge_mpd(mpd_file_url, download_folder_path, title_of_output_mp4, length, key, task_id, progress, portal_name="www"):
     progress.update(task_id,  description=f"Downloading Stream {remove_emojis_and_binary(title_of_output_mp4)}", completed=0)
     
     mpd_filename = os.path.basename(urlparse(mpd_file_url).path)
